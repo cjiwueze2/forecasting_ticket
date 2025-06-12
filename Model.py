@@ -4,8 +4,6 @@ from sklearn.metrics import mean_absolute_percentage_error as MAPE, mean_squared
 from sklearn.model_selection import TimeSeriesSplit
 import matplotlib.pyplot as plt
 from xgboost import XGBRegressor
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
 import numpy as np
 
 class RedemptionModel:
@@ -13,8 +11,7 @@ class RedemptionModel:
     A forecasting class to model and evaluate different techniques
     for predicting ferry ticket redemptions and sales.
 
-    Supports baseline statistical models, machine learning (XGBoost), 
-    and deep learning (LSTM) approaches.
+    Supports baseline statistical models, and machine learning (XGBoost).
     """
 
     def __init__(self, X, target_col):
@@ -42,14 +39,22 @@ class RedemptionModel:
         preds = preds[mask]
         return {
             'MAPE': MAPE(truth, preds),
-            'RMSE': mean_squared_error(truth, preds, squared=False),
+            'RMSE': mean_squared_error(truth, preds) ** 0.5,
             'R2': r2_score(truth, preds)
         }
+        
 
     def _store_results(self, X_test, preds, model_key, cnt, sales=False):
         """
-        Stores evaluation results for a given model and split.
+        Stores evaluation results for a specific model and split.
         Also plots predictions against actuals.
+
+        Parameters:
+        - X_test (pd.DataFrame): Test dataset containing true target values
+        - preds (pd.Series): Model predictions for the test set
+        - model_key (str): Identifier for the model being evaluated
+        - cnt (int): Fold number or split index
+        - sales (bool): Whether to use 'Sales Count' as target instead of default
         """
         if model_key not in self.results:
             self.results[model_key] = {}
@@ -60,6 +65,7 @@ class RedemptionModel:
         self.results[model_key][cnt] = self.score(truth, preds)
         self.plot(preds, model_key)
 
+    
     # Original Models wth modification   
     def _base_model(self, train, test, period):
         '''
@@ -76,20 +82,149 @@ class RedemptionModel:
         daily_avg = seasonal.groupby(seasonal.index).mean()
         return pd.Series(index=test.index, data=[daily_avg.get(x.dayofyear, 0) for x in test.index])
         
+    
+    # Improved Base Model Two using trend + seasonal decomposition components
+    def _base_model_two(self, train, test, period):
+        """
+        Forecasts the target variable by combining trend and seasonal components 
+        obtained from seasonal decomposition.
+    
+        Parameters:
+        - train (pd.DataFrame): Training dataset containing the target variable
+        - test (pd.DataFrame): Test dataset to predict
+        - period (int): Seasonality period for decomposition (e.g., 365 for yearly)
+    
+        Returns:
+        - pd.Series: Predictions aligned with the test index
+        """
+        res = sm.tsa.seasonal_decompose(train[self.target_col], period=period)
+        trend = res.trend.bfill().ffill()
+        seasonal = res.seasonal
+        combined = (trend + seasonal).dropna()
+        combined.index = combined.index.dayofyear
+        daily_avg = combined.groupby(combined.index).mean()
+        return pd.Series(index=test.index, data=[daily_avg.get(x.dayofyear, 0) for x in test.index])
 
+        
+    # Sales forecasting model using seasonal decomposition (trend + seasonal)
+    def _sales_model(self, train, test, period):
+        """
+        Predicts ticket sales using seasonal decomposition of time series data.
+    
+        The model extracts the trend and seasonal components from the 'Sales Count'
+        column, combines them, averages by day-of-year, and uses these averages
+        to forecast the test period.
+    
+        Parameters:
+        - train (pd.DataFrame): Training dataset
+        - test (pd.DataFrame): Test dataset
+        - period (int): Period for seasonal decomposition (e.g., 365 for yearly)
+    
+        Returns:
+        - pd.Series: Predicted sales counts for the test set
+        """
+        res = sm.tsa.seasonal_decompose(train['Sales Count'], period=period)
+        trend = res.trend.bfill().ffill()
+        seasonal = res.seasonal
+        combined = (trend + seasonal).dropna()
+        combined.index = combined.index.dayofyear
+        daily_avg = combined.groupby(combined.index).mean()
+        return pd.Series(index=test.index, data=[daily_avg.get(x.dayofyear, 0) for x in test.index])
+
+    
+    # Machine learning model using XGBoost for time series prediction
+    def _ml_model(self, train, test):
+        """
+        Trains an XGBoost regressor on engineered time series features
+        and predicts target values on the test set.
+    
+        Steps:
+        - Creates lag and calendar-based features using `create_features`.
+        - Trains an XGBoost model on the training data.
+        - Returns predictions as a pandas Series indexed by test data timestamps.
+    
+        Parameters:
+        - train (pd.DataFrame): Training set
+        - test (pd.DataFrame): Test set
+    
+        Returns:
+        - pd.Series: Predicted values for the test set
+    
+        """
+        train = self.create_features(train)
+        test = self.create_features(test)
+        features = ['lag_1', 'lag_7', 'lag_14', 'rolling_mean_3', 'rolling_mean_7',
+                    'dayofweek', 'hour', 'month', 'is_weekend']
+
+        model = XGBRegressor(n_estimators=100, max_depth=3, learning_rate=0.1)
+        model.fit(train[features], train[self.target_col])
+        preds = model.predict(test[features])
+        return pd.Series(index=test.index, data=preds)
+        
+
+    def create_features(self, df):
+        """
+        Generates time-based and lag-based features for time series modeling.
+    
+        Features created:
+        - Lag values (1, 7, 14 days)
+        - Rolling averages (3-day, 7-day)
+        - Calendar-based features: day of week, hour, month, weekend indicator
+    
+        Parameters:
+        - df (pd.DataFrame): Input DataFrame with a datetime index and target column.
+    
+        Returns:
+        - pd.DataFrame: DataFrame with engineered features and no missing values.
+
+        """
+        df = df.copy()
+        df['lag_1'] = df[self.target_col].shift(1)
+        df['lag_7'] = df[self.target_col].shift(7)
+        df['lag_14'] = df[self.target_col].shift(14)
+        df['rolling_mean_3'] = df[self.target_col].rolling(3).mean()
+        df['rolling_mean_7'] = df[self.target_col].rolling(7).mean()
+        df['dayofweek'] = df.index.dayofweek
+        df['hour'] = df.index.hour
+        df['month'] = df.index.month
+        df['is_weekend'] = df['dayofweek'].isin([5, 6]).astype(int)
+        return df.dropna() 
+
+
+    def plot(self, preds, label):
+        """
+        Plots model predictions against actual observed values for visual comparison.
+    
+        Parameters:
+        - preds (pd.Series): Predicted values indexed by date.
+        - label (str): Label for the prediction line in the plot legend.
+        """
+        plt.figure(figsize=(15, 5))
+        plt.scatter(self.X.index, self.X[self.target_col], s=0.4, color='grey', label='Observed')
+        plt.plot(preds.index, preds.values, label=label, color='red')
+        plt.title(f"{label} Prediction vs Actual")
+        plt.xlabel("Date")
+        plt.ylabel(self.target_col)
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
 
     def run_models(self, n_splits=4, test_size=365, period=365,
-                   base_model=1, sales_model=False, ml_model=False, dl_model=False):
+                   base_model=1, sales_model=False, ml_model=False):
         """
-        Trains and evaluates different models using time-series cross-validation.
-        Function modified to accomodate running different models based on params passed
-
+        This function allows selective evaluation of:
+        - Base statistical models (1 or 2)
+        - Sales model (seasonal decomposition on sales count)
+        - Machine learning model (XGBoost)
+    
         Parameters:
-        - n_splits: number of splits for time-series cross-validation
-        - test_size: size of the test set in each split
-        - period: seasonality period for decomposition
-        - base_model: 1 or 2 or 'all' to select base statistical models
-        - sales_model, ml_model, dl_model: Boolean flags to activate respective models
+        - n_splits (int): Number of cross-validation splits.
+        - test_size (int): Size of the test set in each fold.
+        - period (int): Seasonal period for decomposition (e.g., 365 for daily seasonality).
+        - base_model (int): Choose 1 or 2 to run a specific base model.
+        - sales_model (bool): If True, runs the sales count prediction model.
+        - ml_model (bool): If True, runs the XGBoost model on engineered features.
         """
         tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
 
@@ -117,181 +252,21 @@ class RedemptionModel:
                 preds = self._ml_model(X_train, X_test)
                 self._store_results(X_test, preds, 'XGBoost', fold)
 
-             # this Deep learning models predict recemption count as the label example of params base_model=0, ml_model=False, dl_model=True
-            elif dl_model:
-                preds = self._dl_model(X_train, X_test)
-                self._store_results(X_test, preds, 'LSTM', fold)
             else:
                 preds = self._base_model(X_train, X_test, period)
                 self._store_results(X_test, preds, 'Base', fold)
 
         self.summarize_results()
-    
-    #
-    def _base_model_two(self, train, test, period):
-        """
-        Seasonal decomposition using trend + seasonal components.
-        """
-        res = sm.tsa.seasonal_decompose(train[self.target_col], period=period)
-        trend = res.trend.bfill().ffill()
-        seasonal = res.seasonal
-        combined = (trend + seasonal).dropna()
-        combined.index = combined.index.dayofyear
-        daily_avg = combined.groupby(combined.index).mean()
-        return pd.Series(index=test.index, data=[daily_avg.get(x.dayofyear, 0) for x in test.index])
-
-        
-    # new sales model to predict sales count
-    def _sales_model(self, train, test, period):
-        """
-        Forecasts ticket sales based on trend + seasonal decomposition.
-        """
-        res = sm.tsa.seasonal_decompose(train['Sales Count'], period=period)
-        trend = res.trend.bfill().ffill()
-        seasonal = res.seasonal
-        combined = (trend + seasonal).dropna()
-        combined.index = combined.index.dayofyear
-        daily_avg = combined.groupby(combined.index).mean()
-        return pd.Series(index=test.index, data=[daily_avg.get(x.dayofyear, 0) for x in test.index])
-
-    # Trying out a Machine learning model using XGBoost regressor
-    def _ml_model(self, train, test):
-        """
-        Machine learning model using XGBoost regressor with engineered features.
-        """
-        train = self.create_features(train)
-        test = self.create_features(test)
-        features = ['lag_1', 'lag_7', 'lag_14', 'rolling_mean_3', 'rolling_mean_7',
-                    'dayofweek', 'hour', 'month', 'is_weekend']
-
-        model = XGBRegressor(n_estimators=100, max_depth=3, learning_rate=0.1)
-        model.fit(train[features], train[self.target_col])
-        preds = model.predict(test[features])
-        return pd.Series(index=test.index, data=preds)
-        
-    # Trring out a Deep learning model using stacked LSTM layers:
-    def _dl_model(self, train, test, sequence_length=14):
-        """
-        Deep learning model using stacked LSTM layers: 256 → 128 → 64 → 32.
-        
-        Args:
-            train (pd.DataFrame): Training data.
-            test (pd.DataFrame): Testing data.
-            sequence_length (int): Number of past timesteps to use as input.
-    
-        Returns:
-            pd.Series: Predicted values aligned with test index.
-        """
-        from tensorflow.keras.layers import Dropout
-    
-        # Merge train and test for continuous feature generation
-        df = pd.concat([train, test])
-        df = self.create_features(df)
-    
-        features = ['lag_1', 'lag_7', 'lag_14', 'rolling_mean_3', 'rolling_mean_7']
-        df = df.dropna()
-    
-        # Prepare training sequences
-        X, y = [], []
-        for i in range(sequence_length, len(train)):
-            X.append(df[features].iloc[i-sequence_length:i].values)
-            y.append(df[self.target_col].iloc[i])
-    
-        X = np.array(X)  # Shape: (samples, sequence_length, features)
-        y = np.array(y)
-    
-        # Define stacked LSTM model
-        model = Sequential([
-            LSTM(256, activation='relu', return_sequences=True, input_shape=(X.shape[1], X.shape[2])),
-            Dropout(0.2),
-            LSTM(128, activation='relu', return_sequences=True),
-            Dropout(0.2),
-            LSTM(64, activation='relu', return_sequences=True),
-            Dropout(0.2),
-            LSTM(32, activation='relu'),
-            Dense(1)
-        ])
-        model.compile(optimizer='adam', loss='mse')
-        model.fit(X, y, epochs=20, verbose=0)
-    
-        # Prepare test sequences
-        X_test = []
-        test_start = len(train)
-        for i in range(test_start, len(df)):
-            if i - sequence_length < 0:
-                continue
-            X_test.append(df[features].iloc[i-sequence_length:i].values)
-    
-        X_test = np.array(X_test)
-    
-        # Predict
-        preds = model.predict(X_test, verbose=0)
-    
-        # Align predictions with test index
-        aligned_index = df.iloc[-len(preds):].index
-        return pd.Series(index=aligned_index, data=preds.flatten())
-
-
-
-    def create_features(self, df):
-        """
-        Create lag, rolling, and datetime features for time series forecasting.
-        Assumes 'date' is either in the index or as a column.
-        """
-        df = df.copy()
-    
-        # If 'date' column is missing, create it from index
-        if 'date' not in df.columns:
-            df['date'] = df.index
-    
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values('date')
-        df.set_index('date', inplace=True)
-    
-        # Lag features
-        df['lag_1'] = df[self.target_col].shift(1)
-        df['lag_7'] = df[self.target_col].shift(7)
-        df['lag_14'] = df[self.target_col].shift(14)
-    
-        # Rolling averages
-        df['rolling_mean_3'] = df[self.target_col].shift(1).rolling(window=3).mean()
-        df['rolling_mean_7'] = df[self.target_col].shift(1).rolling(window=7).mean()
-    
-        # Datetime-based features
-        df['dayofweek'] = df.index.dayofweek
-        df['hour'] = df.index.hour if hasattr(df.index, 'hour') else 0
-        df['month'] = df.index.month
-        df['is_weekend'] = df['dayofweek'].isin([5, 6]).astype(int)
-    
-        df.dropna(inplace=True)
-        return df
-
-
-    
-
-
-
-
-    def plot(self, preds, label):
-        """
-        Visualizes predictions against observed data.
-        """
-        plt.figure(figsize=(15, 5))
-        plt.scatter(self.X.index, self.X[self.target_col], s=0.4, color='grey', label='Observed')
-        plt.plot(preds.index, preds.values, label=label, color='red')
-        plt.title(f"{label} Prediction vs Actual")
-        plt.xlabel("Date")
-        plt.ylabel(self.target_col)
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-
 
 
     def summarize_results(self):
         """
-        Prints a summary of the performance metrics for each model and fold.
+        Prints a detailed summary of evaluation metrics (MAPE, RMSE, R²) 
+        for each model across all time-series cross-validation folds.
+    
+        For each model:
+        - Displays metrics per fold
+        - Computes and displays the average performance
         """
         print(f"\n📊 Summary for '{self.target_col}' Forecasting:\n")
         for model_name, splits in self.results.items():
@@ -307,45 +282,5 @@ class RedemptionModel:
             print(f"  ➤ Avg R²: {np.mean(r2_list):.4f}\n")
 
 
-    # supplimentary run a single model based on the model name params
-    def run_single_model(self, model_name, n_splits, test_size, period):
-        """
-        Helper function to run a specific model by name.
-    
-        Valid options: Base, BaseModelTwo, Sales, ML, DL
-        """
-        if model_name == 'ML':
-            from xgboost import XGBRegressor
-            from sklearn.model_selection import TimeSeriesSplit
-    
-            # Assume self.df is your dataset and has already been preprocessed
-            features, target = self.prepare_features(self.df)  # ← define this method or replace appropriately
-    
-            tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
-            for train_index, test_index in tscv.split(features):
-                X_train, X_test = features.iloc[train_index], features.iloc[test_index]
-                y_train, y_test = target.iloc[train_index], target.iloc[test_index]
-    
-            # Train the model
-            model = XGBRegressor(n_estimators=100, learning_rate=0.1)
-            model.fit(X_train, y_train)
-    
-            # Save trained model to the object
-            self.model = model
-    
-            # Evaluate Mmdel
-            preds = model.predict(X_test)
-            print("ML Model trained and stored in self.model")
-    
-        else:
-            # Fall back to your flag-based system
-            model_flags = {
-                'base_model': False,
-                'sales_model': False,
-                'ml_model': model_name == 'ML',
-                'dl_model': model_name == 'DL',
-            }
-    
-            self.run_models(**model_flags, test_size=test_size, period=period, n_splits=n_splits)
-
+   
 
