@@ -1,7 +1,7 @@
 # Ferry Ticket Redemption Forecasting System
 
 ## Overview
-This project develops a forecasting system to predict ferry ticket redemptions and sales using a combination of traditional statistical methods and advanced machine learning techniques. The goal is to enable ferry operators to better plan ticket availability and staffing by providing accurate and reliable demand forecasts.
+Built on a forecasting system to predict ferry ticket redemptions and sales using a combination of traditional statistical methods and advanced machine learning techniques. The goal is to enable ferry operators to better plan ticket availability and staffing by providing accurate and reliable demand forecasts.
 
 
 The system analyzes historical ferry ticket data from the Toronto Island Ferry Ticket Counts.csv dataset, capturing seasonal trends, calendar effects, and longer-term demand shifts.
