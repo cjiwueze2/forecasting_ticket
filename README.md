@@ -120,7 +120,7 @@ pip install pandas statsmodels scikit-learn matplotlib xgboost numpy seaborn
  **XGBoost**
 •	XGBRegressor: XGBRegressor Documentation
 
-## AI Usage Disclosure
+## AI Usage Disclosure (Copilot)
 This disclosure is made in the interest of transparency regarding the use of AI tools:
 - Formatting Support: AI was used to assist with bullet points, tables, and summaries after the initial draft to meet word count and formatting requirements for submission.
 
