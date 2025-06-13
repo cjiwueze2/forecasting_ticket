@@ -98,7 +98,7 @@ All modeling was encapsulated within a reusable, modular class: `RedemptionModel
 - `README.md`: This file, with project overview and documentation.
 
 
-## ✅ How to Run
+## Environment 
 1. Install dependencies:
 ```bash
 pip install pandas statsmodels scikit-learn matplotlib xgboost numpy seaborn
