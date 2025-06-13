@@ -24,8 +24,9 @@ class RedemptionModel:
         self._predictions = {}
         self.X = X
         self.target_col = target_col
-        self.results = {}
+        self.results = {} # dict of dicts with model results
 
+    
     def score(self, truth, preds):
         """
         Calculates evaluation metrics for model performance.
@@ -42,7 +43,67 @@ class RedemptionModel:
             'RMSE': mean_squared_error(truth, preds) ** 0.5,
             'R2': r2_score(truth, preds)
         }
-        
+
+
+    def run_models(self, n_splits=4, test_size=365, period=365,
+                   base_model=1, sales_model=False, ml_model=False):
+        """
+        Run selected models and store results for cross-validated splits in self.results.
+    
+        Parameters:
+        - n_splits (int): Number of cross-validation splits.
+        - test_size (int): Size of each test fold.
+        - period (int): Seasonal period (e.g., 365 for daily seasonality).
+        - base_model (int): Choose 1 or 2 to select base model variant.
+        - sales_model (bool): If True, run the sales-focused model.
+        - ml_model (bool): If True, run the XGBoost machine learning model.
+        """
+        tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
+        cnt = 0  # Fold counter
+    
+        for train_idx, test_idx in tscv.split(self.X):
+            X_train = self.X.iloc[train_idx]
+            X_test = self.X.iloc[test_idx]
+    
+            # Base Model 1
+            if base_model == 1:
+                preds = self._base_model(X_train, X_test, period)
+                model_name = 'Base'
+    
+            # Base Model 2
+            elif base_model == 2:
+                preds = self._base_model_two(X_train, X_test, period)
+                model_name = 'BaseModelTwo'
+    
+            # Sales Model
+            elif sales_model:
+                preds = self._sales_model(X_train, X_test, period)
+                model_name = 'SalesModel'
+    
+            # Machine Learning Model
+            elif ml_model:
+                preds = self._ml_model(X_train, X_test)
+                model_name = 'XGBoost'
+    
+            else:
+                preds = self._base_model(X_train, X_test, period)
+                model_name = 'Base'
+    
+            # Align prediction and truth to avoid length mismatch errors
+            truth = X_test[self.target_col]
+            truth, preds = truth.align(preds, join='inner')
+    
+            # Initialize results dictionary if not already present
+            if model_name not in self.results:
+                self.results[model_name] = {}
+    
+            self.results[model_name][cnt] = self.score(truth, preds)
+            self.plot(preds, model_name)
+            cnt += 1
+    
+        # Summarize all results after cross-validation
+        self.summarize_results()
+
 
     def _store_results(self, X_test, preds, model_key, cnt, sales=False):
         """
@@ -86,8 +147,8 @@ class RedemptionModel:
     # Improved Base Model Two using trend + seasonal decomposition components
     def _base_model_two(self, train, test, period):
         """
-        Forecasts the target variable by combining trend and seasonal components 
-        obtained from seasonal decomposition.
+        Improved base model using both trend and seasonal components.
+        Aggregates by dayofyear and fills missing values in trend.
     
         Parameters:
         - train (pd.DataFrame): Training dataset containing the target variable
@@ -176,7 +237,6 @@ class RedemptionModel:
     
         Returns:
         - pd.DataFrame: DataFrame with engineered features and no missing values.
-
         """
         df = df.copy()
         df['lag_1'] = df[self.target_col].shift(1)
@@ -209,55 +269,7 @@ class RedemptionModel:
         plt.grid(True)
         plt.tight_layout()
         plt.show()
-
-    def run_models(self, n_splits=4, test_size=365, period=365,
-                   base_model=1, sales_model=False, ml_model=False):
-        """
-        This function allows selective evaluation of:
-        - Base statistical models (1 or 2)
-        - Sales model (seasonal decomposition on sales count)
-        - Machine learning model (XGBoost)
-    
-        Parameters:
-        - n_splits (int): Number of cross-validation splits.
-        - test_size (int): Size of the test set in each fold.
-        - period (int): Seasonal period for decomposition (e.g., 365 for daily seasonality).
-        - base_model (int): Choose 1 or 2 to run a specific base model.
-        - sales_model (bool): If True, runs the sales count prediction model.
-        - ml_model (bool): If True, runs the XGBoost model on engineered features.
-        """
-        tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
-
-        for fold, (train_idx, test_idx) in enumerate(tscv.split(self.X)):
-            X_train = self.X.iloc[train_idx]
-            X_test = self.X.iloc[test_idx]
-
-            # original base model with modification
-            if base_model == 1:
-                preds = self._base_model(X_train, X_test, period)
-                self._store_results(X_test, preds, 'Base', fold)
-                
-            # model built from the base model (Seasonal decomposition using trend + seasonal components)
-            elif base_model == 2:
-                preds = self._base_model_two(X_train, X_test, period)
-                self._store_results(X_test, preds, 'BaseModelTwo', fold)
-                
-            # New Sales Model targeting sales count prediction
-            elif sales_model:
-                preds = self._sales_model(X_train, X_test, period)
-                self._store_results(X_test, preds, 'SalesModel', fold, sales=True)
-                
-            # this ML models predict recemption count as the label example of params base_model=0, ml_model=True
-            elif ml_model:
-                preds = self._ml_model(X_train, X_test)
-                self._store_results(X_test, preds, 'XGBoost', fold)
-
-            else:
-                preds = self._base_model(X_train, X_test, period)
-                self._store_results(X_test, preds, 'Base', fold)
-
-        self.summarize_results()
-
+   
 
     def summarize_results(self):
         """
@@ -268,7 +280,7 @@ class RedemptionModel:
         - Displays metrics per fold
         - Computes and displays the average performance
         """
-        print(f"\n📊 Summary for '{self.target_col}' Forecasting:\n")
+        print(f"\n Summary for '{self.target_col}' Forecasting:\n")
         for model_name, splits in self.results.items():
             print(f"Model: {model_name}")
             mape_list, rmse_list, r2_list = [], [], []
