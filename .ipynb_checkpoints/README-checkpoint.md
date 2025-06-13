@@ -120,13 +120,6 @@ pip install pandas statsmodels scikit-learn matplotlib xgboost numpy seaborn
  **XGBoost**
 •	XGBRegressor: XGBRegressor Documentation
 
-## AI Usage Disclosure
-This disclosure is made in the interest of transparency regarding the use of AI tools:
-- Formatting Support: AI was used to assist with bullet points, tables, and summaries after the initial draft to meet word count and formatting requirements for submission.
-
-- All model development, data analysis, and coding—including model selection, feature engineering, training, and evaluation—were performed independently by me using Python and relevant libraries (e.g., XGBoost, statsmodels, scikit-learn, etc.).
-
-
 
 ## Contact
  **Celestine Jiwueze**
